@@ -12,8 +12,10 @@ import com.hmdp.service.IVoucherOrderService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.service.IVoucherService;
 import com.hmdp.utils.RedisIdWorker;
+import com.hmdp.utils.SimpleRedisLock;
 import com.hmdp.utils.UserHolder;
 import org.springframework.aop.framework.AopContext;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -37,6 +39,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Resource
     RedisIdWorker redisIdWorker;
 
+    @Resource
+    StringRedisTemplate stringRedisTemplate;
 
     @Override
     public Result seckillVoucher(Long voucherId) {
@@ -53,18 +57,30 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
             return Result.fail("库存不足!");
         }
         //intern()作用返回字符串的值,而不是对比对象地址
-        synchronized (UserHolder.getUser().getId().toString().intern()){
-            //spring事务失效场景:方法内部调用
+        Long userId = UserHolder.getUser().getId();
+        SimpleRedisLock simpleRedisLock = new SimpleRedisLock("order:"+userId,stringRedisTemplate);
+        //获取锁
+        boolean isLock = simpleRedisLock.tryLock(1200);
+        if (!isLock) {
+            return Result.fail("不允许重复下单!");
+        }
+        //spring事务失效场景:方法内部调用
             /*
              我们看到在事务方法seckillVoucher中，直接调用事务方法createVoucherOrder。从前面介绍的内容可以知道，
              createVoucherOrder方法拥有事务的能力是因为spring aop生成代理了对象，但是这种方法直接
              调用了this对象的方法，所以createVoucherOrder方法不会生成事务。
              */
-            //解决方法:在该Service类中使用AopContext.currentProxy()获取代理对象,通过代理对象调用此方法
-            // (前提:引入aspectjweaver包,在启动类开启暴露代理对象注解:@EnableAspectJAutoProxy(exposeProxy = true))
+        //解决方法:在该Service类中使用AopContext.currentProxy()获取代理对象,通过代理对象调用此方法
+        // (前提:引入aspectjweaver包,在启动类开启暴露代理对象注解:@EnableAspectJAutoProxy(exposeProxy = true))
+        try {
             IVoucherOrderService proxy = (IVoucherOrderService)AopContext.currentProxy();
+
             return proxy.createVoucherOrder(voucherId);
+        }finally {
+            //释放锁
+            simpleRedisLock.unlock();
         }
+
     }
 
     @Override
