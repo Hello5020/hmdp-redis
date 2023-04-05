@@ -47,7 +47,8 @@ public class CacheClient {
         String key = keyPrefix + id;
         String json = stringRedisTemplate.opsForValue().get(key);
         if (StrUtil.isNotBlank(json)) {
-            return JSONUtil.toBean(json, type);
+            R r = JSONUtil.toBean(json, type);
+            return r;
         }
         if (json != null){
             // 返回一个错误信息
@@ -66,7 +67,7 @@ public class CacheClient {
     public <R,ID> R queryWithLogicExpire(String keyPrefix, ID id, Class<R> type, Function<ID,R> dbFallback,Long time, TimeUnit unit){
         String key = keyPrefix + id;
         String json = stringRedisTemplate.opsForValue().get(key);
-        if (StrUtil.isBlank(json)) {
+        if (StrUtil.isNotBlank(json)) {
             return null;
         }
         //判断过期时间
