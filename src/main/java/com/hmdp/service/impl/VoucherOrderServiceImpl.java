@@ -17,12 +17,15 @@ import com.hmdp.utils.UserHolder;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.aop.framework.AopContext;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
 import java.time.LocalDateTime;
+import java.util.Collections;
 
 /**
  * <p>
@@ -47,49 +50,75 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
     @Resource
     RedissonClient redissonClient;
 
+    private static final DefaultRedisScript<Long> SECKILL_SCRIPT;
+    static {
+        SECKILL_SCRIPT = new DefaultRedisScript<>();
+        SECKILL_SCRIPT.setLocation(new ClassPathResource("seckill.lua"));
+        SECKILL_SCRIPT.setResultType(Long.class);
+    }
+
     @Override
     public Result seckillVoucher(Long voucherId) {
-        //查询优惠券
-        SeckillVoucher voucher = iSeckillVoucherService.getById(voucherId);
-        //判断是否开始
-        if (voucher.getBeginTime().isAfter(LocalDateTime.now())){
-            return Result.fail("秒杀未开始!");
-        }
-        if (voucher.getEndTime().isBefore(LocalDateTime.now())){
-            return Result.fail("秒杀已结束!");
-        }
-        if (voucher.getStock() < 1) {
-            return Result.fail("库存不足!");
-        }
-        //intern()作用返回字符串的值,而不是对比对象地址
+        //执行lua脚本
+        //execute()传三个参数,第一个为脚本,第二个为key参数,第三个为AGV参数
         Long userId = UserHolder.getUser().getId();
-//        SimpleRedisLock simpleRedisLock = new SimpleRedisLock("order:"+userId,stringRedisTemplate);
-        RLock lock = redissonClient.getLock("lock:order:" + userId);
-        //获取锁
-//        boolean isLock = simpleRedisLock.tryLock(1200);
-        boolean isLock = lock.tryLock();
-        if (!isLock) {
-            return Result.fail("不允许重复下单!");
+        Long result = stringRedisTemplate.execute(SECKILL_SCRIPT,
+                Collections.emptyList(),
+                voucherId.toString(), userId.toString()
+        );
+        int r = result.intValue();
+        if (r != 0) {
+            return Result.fail(r == 1 ? "库存不足!":"用户不能重复下单!");
         }
-        //spring事务失效场景:方法内部调用
-            /*
-             我们看到在事务方法seckillVoucher中，直接调用事务方法createVoucherOrder。从前面介绍的内容可以知道，
-             createVoucherOrder方法拥有事务的能力是因为spring aop生成代理了对象，但是这种方法直接
-             调用了this对象的方法，所以createVoucherOrder方法不会生成事务。
-             */
-        //解决方法:在该Service类中使用AopContext.currentProxy()获取代理对象,通过代理对象调用此方法
-        // (前提:引入aspectjweaver包,在启动类开启暴露代理对象注解:@EnableAspectJAutoProxy(exposeProxy = true))
-        try {
-            IVoucherOrderService proxy = (IVoucherOrderService)AopContext.currentProxy();
-
-            return proxy.createVoucherOrder(voucherId);
-        }finally {
-            //释放锁
-//            simpleRedisLock.unlock();
-            lock.unlock();
-        }
-
+        //保存阻塞队列
+        long orderId = redisIdWorker.nextId("order");
+        //返回id
+        return Result.ok(orderId);
     }
+
+//    @Override
+//    public Result seckillVoucher(Long voucherId) {
+//        //查询优惠券
+//        SeckillVoucher voucher = iSeckillVoucherService.getById(voucherId);
+//        //判断是否开始
+//        if (voucher.getBeginTime().isAfter(LocalDateTime.now())){
+//            return Result.fail("秒杀未开始!");
+//        }
+//        if (voucher.getEndTime().isBefore(LocalDateTime.now())){
+//            return Result.fail("秒杀已结束!");
+//        }
+//        if (voucher.getStock() < 1) {
+//            return Result.fail("库存不足!");
+//        }
+//        //intern()作用返回字符串的值,而不是对比对象地址
+//        Long userId = UserHolder.getUser().getId();
+////        SimpleRedisLock simpleRedisLock = new SimpleRedisLock("order:"+userId,stringRedisTemplate);
+//        RLock lock = redissonClient.getLock("lock:order:" + userId);
+//        //获取锁
+////        boolean isLock = simpleRedisLock.tryLock(1200);
+//        boolean isLock = lock.tryLock();
+//        if (!isLock) {
+//            return Result.fail("不允许重复下单!");
+//        }
+//        //spring事务失效场景:方法内部调用
+//            /*
+//             我们看到在事务方法seckillVoucher中，直接调用事务方法createVoucherOrder。从前面介绍的内容可以知道，
+//             createVoucherOrder方法拥有事务的能力是因为spring aop生成代理了对象，但是这种方法直接
+//             调用了this对象的方法，所以createVoucherOrder方法不会生成事务。
+//             */
+//        //解决方法:在该Service类中使用AopContext.currentProxy()获取代理对象,通过代理对象调用此方法
+//        // (前提:引入aspectjweaver包,在启动类开启暴露代理对象注解:@EnableAspectJAutoProxy(exposeProxy = true))
+//        try {
+//            IVoucherOrderService proxy = (IVoucherOrderService)AopContext.currentProxy();
+//
+//            return proxy.createVoucherOrder(voucherId);
+//        }finally {
+//            //释放锁
+////            simpleRedisLock.unlock();
+//            lock.unlock();
+//        }
+//
+//    }
 
     @Override
     @Transactional
