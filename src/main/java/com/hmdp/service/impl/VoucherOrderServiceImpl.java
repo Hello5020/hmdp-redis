@@ -175,7 +175,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 //    }
 
     @Override
-    @Transactional
+    @Transactional(rollbackFor=Exception.class)
     public void createVoucherOrder(VoucherOrder voucherOrder) {
         //判断库存是否充足
         Long userId = voucherOrder.getUserId();
