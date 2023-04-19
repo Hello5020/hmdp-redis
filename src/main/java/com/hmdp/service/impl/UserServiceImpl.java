@@ -4,7 +4,6 @@ import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.bean.copier.CopyOptions;
 import cn.hutool.core.lang.UUID;
 import cn.hutool.core.util.RandomUtil;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.dto.LoginFormDTO;
 import com.hmdp.dto.Result;
@@ -87,6 +86,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
                         .setFieldValueEditor((fieldName,fieldValue) -> fieldValue.toString())));
         stringRedisTemplate.expire(key,LOGIN_USER_TTL,TimeUnit.SECONDS);
         return Result.ok(token);
+    }
+
+    @Override
+    public Result getUserById(Long userId) {
+        User user = getById(userId);
+        if (user == null){
+            return Result.fail("用户已注销或不存在!");
+        }
+        UserDTO userDTO = BeanUtil.copyProperties(user, UserDTO.class);
+        return Result.ok(userDTO);
     }
 
     private User createUserByPhone(String phone) {
