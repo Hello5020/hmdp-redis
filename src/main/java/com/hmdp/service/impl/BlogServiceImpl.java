@@ -1,31 +1,35 @@
 package com.hmdp.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
-import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hmdp.dto.Result;
+import com.hmdp.dto.ScrollResult;
 import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.Blog;
+import com.hmdp.entity.Follow;
 import com.hmdp.entity.User;
 import com.hmdp.mapper.BlogMapper;
 import com.hmdp.service.IBlogService;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.hmdp.service.IFollowService;
 import com.hmdp.service.IUserService;
 import com.hmdp.utils.SystemConstants;
 import com.hmdp.utils.UserHolder;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 import javax.annotation.Resource;
-import java.time.LocalDateTime;
-import java.time.ZoneOffset;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import static com.hmdp.utils.RedisConstants.BLOG_LIKED_KEY;
+import static com.hmdp.utils.RedisConstants.FEED_KEY;
 
 /**
  * <p>
@@ -43,6 +47,9 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
 
     @Resource
     StringRedisTemplate stringRedisTemplate;
+
+    @Resource
+    IFollowService followService;
 
     @Override
     public Result queryBlogById(Long id) {
@@ -145,6 +152,67 @@ public class BlogServiceImpl extends ServiceImpl<BlogMapper, Blog> implements IB
         Page<Blog> blogPage = query().eq("user_id", id).page(new Page<Blog>(current, SystemConstants.MAX_PAGE_SIZE));
         List<Blog> records = blogPage.getRecords();
         return Result.ok(records);
+    }
+
+    @Override
+    public Result saveBlog(Blog blog) {
+        UserDTO user = UserHolder.getUser();
+        blog.setUserId(user.getId());
+        boolean isSuccess = save(blog);
+        if (!isSuccess){
+            return Result.fail("当前博客生成失败!");
+        }
+        //查询作者的所有粉丝
+        List<Follow> followUser = followService.query().eq("follow_user_id", user.getId()).list();
+        if (followUser != null || !followUser.isEmpty()){
+            //推送笔记id
+            followUser.forEach(follow -> {
+                Long userId = follow.getUserId();
+                String key = FEED_KEY+userId;
+                stringRedisTemplate.opsForZSet()
+                        .add(key,blog.getId().toString(),System.currentTimeMillis());
+            });
+        }
+        return Result.ok(blog.getId());
+    }
+
+    @Override
+    public Result getBlogOfFollow(Long lastId,Integer offset) {
+        UserDTO user = UserHolder.getUser();
+        String key = FEED_KEY+user.getId();
+        //查询收件箱
+        Set<ZSetOperations.TypedTuple<String>> tuples = stringRedisTemplate.opsForZSet()
+                .reverseRangeByScoreWithScores(key, 0, lastId, offset, 2);
+        if (CollectionUtils.isEmpty(tuples)){
+            return Result.ok();
+        }
+        //解析数据:blogId,minTime,offset
+        AtomicReference<Long> minTime = new AtomicReference<>(0L);
+        AtomicInteger os = new AtomicInteger();
+        os.set(0);
+        List<Long> idList = tuples.stream().map(tuple -> {
+                 Long score = tuple.getScore().longValue();
+                if (score.equals(minTime.get())){
+                    os.getAndIncrement();
+                }else {
+                    minTime.set(score);
+                    os.set(1);
+                }
+            minTime.set(score);
+            return Long.valueOf(tuple.getValue());
+        }).collect(Collectors.toList());
+        //根据id查询blog
+        String idStr = StrUtil.join(",", idList);
+        List<Blog> blogList = query().in("id", idList).last("ORDER BY FIELD(id," + idStr + ")").list();
+        blogList.forEach(blog -> {
+            queryBlogUser(blog);
+            isBlogLiked(blog);
+        });
+        ScrollResult result = new ScrollResult();
+        result.setList(blogList);
+        result.setOffset(os.get());
+        result.setMinTime(minTime.get());
+        return Result.ok(result);
     }
 
     private void queryBlogUser(Blog blog) {
