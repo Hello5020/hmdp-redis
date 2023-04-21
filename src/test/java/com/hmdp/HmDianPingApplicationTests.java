@@ -6,16 +6,19 @@ import com.hmdp.utils.CacheClient;
 import com.hmdp.utils.RedisIdWorker;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.geo.Point;
+import org.springframework.data.redis.connection.RedisGeoCommands;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 
 import javax.annotation.Resource;
 
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import static com.hmdp.utils.RedisConstants.CACHE_SHOP_KEY;
 
@@ -68,5 +71,27 @@ class HmDianPingApplicationTests {
         if (tuples==null){
             System.out.println("wrong");
         }
+    }
+
+    @Test
+    void loadShopDate(){
+        //查询店铺信息
+        List<Shop> list = shopService.list();
+        //对店铺进行分组按类型
+        Map<Long,List<Shop>> shopMap = list.stream().collect(Collectors.groupingBy(shop -> shop.getTypeId()));
+        //分批完成写入redis
+        for (Map.Entry<Long,List<Shop>> entry:
+             shopMap.entrySet()) {
+            Long typeId = entry.getKey();
+            List<Shop> shopList = entry.getValue();
+            String key = "shop:geo:"+typeId;
+            List<RedisGeoCommands.GeoLocation<String>> locations = new ArrayList<>();
+            shopList.forEach(shop -> {
+                //stringRedisTemplate.opsForGeo().add(key,new Point(shop.getX(),shop.getY()),shop.getId().toString());
+                locations.add(new RedisGeoCommands.GeoLocation<>(shop.getId().toString(),new Point(shop.getX(),shop.getY())));
+            });
+            stringRedisTemplate.opsForGeo().add(key,locations);
+        }
+
     }
 }
