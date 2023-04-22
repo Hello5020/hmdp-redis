@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static com.hmdp.utils.RedisConstants.CACHE_SHOP_KEY;
+import static com.hmdp.utils.RedisConstants.SHOP_GEO_KEY;
 
 @SpringBootTest
 class HmDianPingApplicationTests {
@@ -84,7 +85,7 @@ class HmDianPingApplicationTests {
              shopMap.entrySet()) {
             Long typeId = entry.getKey();
             List<Shop> shopList = entry.getValue();
-            String key = "shop:geo:"+typeId;
+            String key = SHOP_GEO_KEY+typeId;
             List<RedisGeoCommands.GeoLocation<String>> locations = new ArrayList<>();
             shopList.forEach(shop -> {
                 //stringRedisTemplate.opsForGeo().add(key,new Point(shop.getX(),shop.getY()),shop.getId().toString());
